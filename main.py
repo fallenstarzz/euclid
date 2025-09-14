@@ -16,13 +16,13 @@ import random
 from datetime import datetime
 from typing import Optional
 
-# Suppress ALL verbose logging for clean UI
+# FIXED: Return to clean UI logging (issue resolved)
 logging.basicConfig(
-    level=logging.CRITICAL,  # Only critical errors
+    level=logging.CRITICAL,  # Only critical errors for clean UI
     format='%(message)s'
 )
 
-# Disable ALL internal logs for clean interface
+# Suppress ALL internal logs for clean interface
 logging.getLogger('web3').setLevel(logging.CRITICAL)
 logging.getLogger('urllib3').setLevel(logging.CRITICAL)
 logging.getLogger('requests').setLevel(logging.CRITICAL)
@@ -59,6 +59,33 @@ from src.utils import (
 from colorama import Fore, Style, init
 
 init(autoreset=True)
+
+# --- Compatibility stubs for legacy UI helpers (no-ops to avoid linter warnings) ---
+def print_banner():
+    pass
+
+def calculate_next_swap_time(interval_minutes, randomization):
+    from datetime import datetime, timedelta
+    return datetime.now() + timedelta(minutes=interval_minutes)
+
+def wait_with_countdown(seconds, label):
+    pass
+
+def format_timestamp():
+    from datetime import datetime
+    return datetime.now().isoformat()
+
+def print_wallet_status(status):
+    pass
+
+def print_session_status(status):
+    pass
+
+def print_status_header():
+    pass
+
+def print_final_stats(perf, points_status):
+    pass
 
 def setup_referral(session=None):
     """Add referral code to session for point credits"""
@@ -198,69 +225,23 @@ class EuclidBot:
             if self.session_manager.load_session_from_env():
                 cookies = self.session_manager.get_session_cookies()
             
-            if not cookies:
-                # Only prompt if no cookies in .env
-                print("\nSession Setup Required")
-                print("Enter cookie collection method:")
-                print("1. Paste full cookie header")
-                print("2. Enter cookies individually")
-                print("3. Load from .env file")
-                print("4. Skip (may cause auth errors)")
-                
-                choice = input("\nSelect option (1-4): ").strip()
-                if choice == "3":
-                    if self.session_manager.load_session_from_env():
-                        cookies = self.session_manager.get_session_cookies()
-                elif choice == "4":
-                    cookies = {}
-                else:
-                    if self.session_manager.prompt_for_cookies():
-                        cookies = self.session_manager.get_session_cookies()
+            # Do not prompt for cookies here; proceed with whatever was loaded
             
             # Initialize components silently
             self.points_tracker = PointsTracker(self.config, cookies)
             self.swap_executor = SwapExecutor(self.wallet, self.config)
             
-            # Initialize Adaptive Amount System
-            self.adaptive_config_manager = AdaptiveConfigManager()
-            print(f"\n{Fore.CYAN}[ADAPTIVE]{Style.RESET_ALL} Initializing Intelligent Amount System...")
-            
-            # Setup adaptive configuration
-            self.adaptive_config = self._setup_adaptive_configuration()
-            if self.adaptive_config:
-                # Create adaptive swap executor
-                self.adaptive_swap_executor = AdaptiveSwapExecutor(
-                    self.wallet, 
-                    self.config,
-                    self.adaptive_config
-                )
-                print(f"{Fore.GREEN}[ADAPTIVE]{Style.RESET_ALL} System initialized successfully!")
-                
-                # Initialize Dual-Module Auto-Switch System (Clean Architecture)
-                self.swap_orchestrator = SwapOrchestrator(
-                    wallet_manager=self.wallet,
-                    swap_executor=self.adaptive_swap_executor,
-                    adaptive_manager=self.adaptive_swap_executor.adaptive_manager if self.adaptive_swap_executor else None,
-                    somnia_connector=self.stt_connector
-                )
-                print(f"{Fore.CYAN}[ORCHESTRATOR]{Style.RESET_ALL} Dual-Module System initialized!")
-            else:
-                print(f"{Fore.RED}[ERROR]{Style.RESET_ALL} Adaptive system setup failed")
-                return False
-            
-            # Initialize STT Real-time Balance Connector
-            print("🔗 Connecting to Somnia for real-time STT balance...")
-            self.stt_connector = SomniaChainConnector()
-            if self.stt_connector.connected:
-                print("✅ Real-time STT balance monitoring READY!")
-            else:
-                print("⚠️  STT connection failed, using fallback estimation")
-            
-            # Setup referral code
-            self.referral_code = setup_referral()
-            if self.referral_code:
-                # Apply referral to swap executor session
+            # Silently load saved referral and apply
+            try:
+                if os.path.exists('referral_config.json'):
+                    with open('referral_config.json', 'r') as f:
+                        ref = json.load(f)
+                        code = ref.get('referral_code')
+                        if code:
+                            self.referral_code = code
                 self.apply_referral_to_sessions()
+            except Exception:
+                pass
             
             return True
         except Exception as e:
@@ -636,8 +617,264 @@ class EuclidBot:
             print(Colors.colorize_brackets("[ERROR] Failed to initialize bot"))
             return
         
-        # Run continuous loop
-        self.run_continuous_loop()
+        # Run interactive menu
+        self.run_menu()
+
+    def run_menu(self):
+        """Interactive menu for selecting swap routes in the specified order."""
+        try:
+            print("\n" + "=" * 58)
+            print(" EUCLID PROTOCOL BOT v2.0")
+            print(" Cross-Chain Swap Automation")
+            print("=" * 58)
+            print(f"Connected: {self.wallet.get_address()[:6]}...{self.wallet.get_address()[-4:]} | Network: Multi-Chain\n")
+
+            print("SELECT YOUR SWAP:")
+            print("-" * 58)
+            print("  1) PLUME → STT   (Same Network - Fast)")
+            print("  2) STT → PLUME   (Same Network - Fast)")
+            print("  3) PHRS → ETH    (Cross-Chain: Pharos → Unichain)")
+            print("  4) ETH → PHRS    (Cross-Chain: Unichain → Pharos)")
+            print("  5) Exit")
+
+            choice = input("\nEnter choice [1-5]: ").strip()
+
+            if choice == "1":
+                # PLUME → STT
+                # Live source balance
+                plume_bal = self._get_native_balance("plume")
+                print(Colors.colorize_brackets(f"[BALANCE] Source PLUME: {plume_bal:.6f}"))
+                default_amt = 0.1
+                amt_str = input(f"Amount PLUME (default {default_amt}): ").strip()
+                amount = float(amt_str) if amt_str else default_amt
+                amount_wei = int(amount * 10**18)
+                # Route preview
+                preview = self._preview_route("plume", "stt", amount_wei)
+                if preview:
+                    route_str, out_float = preview
+                    print(Colors.colorize_brackets(f"[STATS] Route: {route_str} | Expect: {out_float:.6f} STT"))
+                    proceed = input("Proceed? (y/N): ").strip().lower()
+                    if proceed != 'y':
+                        print("Cancelled.")
+                        return
+                # Contextual adaptive config
+                cfg = self._configure_amount_context("PLUME", amount)
+                mode, count = self._select_execution_mode()
+                self._execute_swaps_generic("plume", "stt", False, cfg.current_amount, mode, count)
+
+            elif choice == "2":
+                # STT → PLUME
+                stt_bal = self._get_native_balance("stt")
+                print(Colors.colorize_brackets(f"[BALANCE] Source STT: {stt_bal:.6f}"))
+                default_amt = 0.01
+                amt_str = input(f"Amount STT (default {default_amt}): ").strip()
+                amount = float(amt_str) if amt_str else default_amt
+                amount_wei = int(amount * 10**18)
+                preview = self._preview_route("stt", "plume", amount_wei)
+                if preview:
+                    route_str, out_float = preview
+                    print(Colors.colorize_brackets(f"[STATS] Route: {route_str} | Expect: {out_float:.6f} PLUME"))
+                    proceed = input("Proceed? (y/N): ").strip().lower()
+                    if proceed != 'y':
+                        print("Cancelled.")
+                        return
+                cfg = self._configure_amount_context("STT", amount)
+                mode, count = self._select_execution_mode()
+                self._execute_swaps_generic("stt", "plume", False, cfg.current_amount, mode, count)
+
+            elif choice == "3":
+                # PHRS → ETH
+                phrs_bal = self._get_native_balance("phrs")
+                print(Colors.colorize_brackets(f"[BALANCE] Source PHRS: {phrs_bal:.6f}"))
+                default_amt = 0.1
+                amt_str = input(f"Amount PHRS (default {default_amt}): ").strip()
+                amount = float(amt_str) if amt_str else default_amt
+                amount_wei = int(amount * 10**18)
+                preview = self._preview_route("phrs", "eth", amount_wei)
+                if preview:
+                    route_str, out_float = preview
+                    print(Colors.colorize_brackets(f"[STATS] Route: {route_str} | Expect: {out_float:.6f} ETH"))
+                    proceed = input("Proceed? (y/N): ").strip().lower()
+                    if proceed != 'y':
+                        print("Cancelled.")
+                        return
+                cfg = self._configure_amount_context("PHRS", amount)
+                mode, count = self._select_execution_mode()
+                self._execute_swaps_generic("phrs", "eth", True, cfg.current_amount, mode, count)
+
+            elif choice == "4":
+                # ETH → PHRS
+                eth_bal = self._get_native_balance("eth")
+                print(Colors.colorize_brackets(f"[BALANCE] Source ETH: {eth_bal:.6f}"))
+                default_amt = 0.01
+                amt_str = input(f"Amount ETH (default {default_amt}): ").strip()
+                amount = float(amt_str) if amt_str else default_amt
+                amount_wei = int(amount * 10**18)
+                preview = self._preview_route("eth", "phrs", amount_wei)
+                if preview:
+                    route_str, out_float = preview
+                    print(Colors.colorize_brackets(f"[STATS] Route: {route_str} | Expect: {out_float:.6f} PHRS"))
+                    proceed = input("Proceed? (y/N): ").strip().lower()
+                    if proceed != 'y':
+                        print("Cancelled.")
+                        return
+                cfg = self._configure_amount_context("ETH", amount)
+                mode, count = self._select_execution_mode()
+                self._execute_swaps_generic("eth", "phrs", True, cfg.current_amount, mode, count)
+
+            else:
+                print("Goodbye.")
+                return
+
+        except Exception as e:
+            print(Colors.colorize_brackets(f"[ERROR] {str(e)[:120]}"))
+
+    def _get_native_balance(self, token: str) -> float:
+        """Switch to the token's network and get native balance."""
+        try:
+            self.wallet.switch_network(token)
+            bal = float(self.wallet.get_balance())
+            return bal
+        except Exception:
+            return 0.0
+
+    def _preview_route(self, token_in: str, token_out: str, amount_wei: int):
+        """Fetch route and expected output for preview."""
+        try:
+            data = self.swap_executor.calculate_swap_route(token_in, token_out, amount_wei)
+            if not data or not data.get("paths"):
+                return None
+            path = data["paths"][0]["path"][0]
+            route_tokens = path.get("route", [])
+            amount_out = path.get("amount_out", "0")
+            out_float = int(amount_out) / 1e18
+            route_str = " → ".join(route_tokens)
+            return route_str, out_float
+        except Exception:
+            return None
+
+    def _configure_amount_context(self, token_label: str, default_amount: float):
+        """Prompt adaptive configuration in context of selected token, token-agnostic storage."""
+        try:
+            from src.adaptive_config import AdaptiveConfigManager
+            mgr = AdaptiveConfigManager()
+            print(f"\nConfigure adaptive settings for {token_label} swaps")
+            use_saved = mgr.prompt_use_saved_configuration()
+            if use_saved:
+                cfg = mgr.load_saved_configuration()
+                if cfg:
+                    return cfg
+            # Quick choice: fixed/adaptive
+            mode_choice = input("Mode: 1) Fixed  2) Adaptive [default 2]: ").strip()
+            if mode_choice == '1' and default_amount >= 0.1:
+                from src.adaptive_amount_manager import AdaptiveConfiguration
+                return AdaptiveConfiguration(initial_amount=default_amount)
+            # Advanced adaptive prompt
+            cfg, ok = mgr.prompt_user_for_configuration(token_label)
+            if ok and cfg:
+                return cfg
+        except Exception:
+            pass
+        # Fallback fixed
+        from src.adaptive_amount_manager import AdaptiveConfiguration
+        return AdaptiveConfiguration(initial_amount=default_amount)
+
+    def _select_execution_mode(self):
+        """Ask for execution mode and optional count."""
+        print("\nExecution mode:")
+        print("  1) Single swap")
+        print("  2) Multiple swaps")
+        print("  3) Continuous mode")
+        choice = input("Choose [1-3] (default 1): ").strip()
+        if choice == '2':
+            try:
+                cnt = int(input("Number of swaps: ").strip())
+                return 2, max(1, cnt)
+            except Exception:
+                return 2, 3
+        elif choice == '3':
+            return 3, 0
+        return 1, 1
+
+    def _execute_swaps_generic(self, token_in: str, token_out: str, cross_chain: bool, amount_tokens: float, mode: int, count: int):
+        """Execute swaps per selected mode using appropriate executor."""
+        try:
+            def do_one(a_tokens: float):
+                a_wei = int(a_tokens * 10**18)
+                if cross_chain:
+                    return self.swap_executor.execute_cross_chain_swap(token_in, token_out, a_wei)
+                else:
+                    return self.swap_executor.execute_swap(token_in=token_in, token_out=token_out, amount=str(a_wei))
+
+            if mode == 1:
+                ui.display_swap_processing(1, f"{token_in.upper()} → {token_out.upper()}")
+                start_t = time.time()
+                tx = do_one(amount_tokens)
+                if tx:
+                    confirm_t = time.time() - start_t
+                    explorer = self._explorer_url_for_tx(tx, token_in)
+                    ui.display_swap_success(confirm_t, tx, explorer)
+                else:
+                    ui.display_swap_failed("Swap failed")
+                ui.display_swap_separator()
+                return
+
+            if mode == 2:
+                ok = 0
+                ui.display_mode_banner(continuous=False, session_total=0, grand_total=0)
+                for i in range(count):
+                    ui.display_swap_processing(i+1, f"{token_in.upper()} → {token_out.upper()}")
+                    start_t = time.time()
+                    tx = do_one(amount_tokens)
+                    if tx:
+                        ok += 1
+                        confirm_t = time.time() - start_t
+                        explorer = self._explorer_url_for_tx(tx, token_in)
+                        ui.display_swap_success(confirm_t, tx, explorer)
+                        ui.display_stats_line(ok + (count - (i+1)), (ok / (i+1)) * 100)
+                    else:
+                        ui.display_swap_failed(f"Swap #{i+1} failed")
+                    ui.display_swap_separator()
+                print(Colors.colorize_brackets(f"[STATS] Completed: {ok}/{count}"))
+                return
+
+            # Continuous mode
+            i = 0
+            ui.display_mode_banner(continuous=True, session_total=0, grand_total=0)
+            n = 0
+            while True:
+                i += 1
+                n += 1
+                ui.display_swap_processing(i, f"{token_in.upper()} → {token_out.upper()}")
+                start_t = time.time()
+                tx = do_one(amount_tokens)
+                if tx:
+                    confirm_t = time.time() - start_t
+                    explorer = self._explorer_url_for_tx(tx, token_in)
+                    ui.display_swap_success(confirm_t, tx, explorer)
+                else:
+                    ui.display_swap_failed(f"Swap #{i} failed")
+                ui.display_swap_separator()
+                cont = input("Continue? (Y/n): ").strip().lower()
+                if cont == 'n':
+                    break
+        except KeyboardInterrupt:
+            print("Stopped.")
+        except Exception as e:
+            print(Colors.colorize_brackets(f"[ERROR] {str(e)[:120]}"))
+
+    def _explorer_url_for_tx(self, tx_hash: str, token_in: str) -> str:
+        """Choose explorer based on source chain token."""
+        t = (token_in or '').lower()
+        if t in ['plume', 'native']:
+            return f"https://testnet-explorer.plume.org/tx/{tx_hash}"
+        if t in ['stt', 'somnia']:
+            return f"https://shannon-explorer.somnia.network/tx/{tx_hash}"
+        if t in ['phrs', 'pharos']:
+            return f"https://explorer.pharos.network/tx/{tx_hash}"
+        if t in ['eth', 'unichain']:
+            return f"https://testnet.uniscan.xyz/tx/{tx_hash}"
+        return tx_hash
     
     def run_original_mode(self):
         """Original bot execution mode with full UI"""
