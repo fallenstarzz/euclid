@@ -1,0 +1,22 @@
+{
+  "adaptive_amount": {
+    "initial_amount": 0.1,
+    "mode": "adaptive",
+    "increment_step": 0.1,
+    "decrement_step": 0.1,
+    "stability_threshold": 5,
+    "max_increment_attempts": 5,
+    "max_ceiling": 1.0,
+    "min_floor": 0.1,
+    "enable_descending": true,
+    "current_amount": 0.1,
+    "current_phase": "ascending",
+    "increment_attempts": 0,
+    "consecutive_successes": 0,
+    "total_adjustments": 0,
+    "optimal_amount": null,
+    "tokens_saved": 0.0
+  },
+  "saved_at": "2025-09-15 01:37:15",
+  "version": "1.0"
+}
