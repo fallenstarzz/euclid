@@ -173,12 +173,14 @@ class SwapExecutor:
                 timeout=30
             )
             if route_resp.status_code != 200:
-                self.logger.error(f"[ROUTE] Failed: {route_resp.status_code} - {route_resp.text}")
-                return None
+                err = f"ROUTE {route_resp.status_code} {route_resp.text[:200]}"
+                self.logger.error(f"[ROUTE] Failed: {err}")
+                raise RuntimeError(err)
             route_data = route_resp.json()
             if not route_data.get("paths"):
-                self.logger.warning("[ROUTE] No paths returned")
-                return None
+                err = "No route path returned"
+                self.logger.warning(f"[ROUTE] {err}")
+                raise RuntimeError(err)
             best_path = route_data["paths"][0]["path"][0]
             expected_out = best_path["amount_out"]
             route_tokens = best_path["route"]
@@ -228,20 +230,23 @@ class SwapExecutor:
                 timeout=45
             )
             if exec_resp.status_code != 200:
-                self.logger.error(f"[EXECUTE] Failed: {exec_resp.status_code} - {exec_resp.text}")
-                return None
+                err = f"EXECUTE {exec_resp.status_code} {exec_resp.text[:200]}"
+                self.logger.error(f"[EXECUTE] Failed: {err}")
+                raise RuntimeError(err)
             exec_data = exec_resp.json()
             meta = exec_data.get("meta", "")
             if not exec_data.get("msgs"):
-                self.logger.error("[EXECUTE] Missing msgs in response")
-                return None
+                err = f"Missing msgs in response: {json.dumps(exec_data)[:200]}"
+                self.logger.error(f"[EXECUTE] {err}")
+                raise RuntimeError(err)
 
             # 3) Submit transaction on source chain
             self.logger.info("[TX] Submitting transaction to source chain")
-            tx_hash = self.wallet.execute_swap_transaction(exec_data, token_in, wait_for_receipt=True)
+            tx_hash = self.wallet.execute_swap_transaction(exec_data, token_in, wait_for_receipt=False)
             if not tx_hash:
-                self.logger.error("[TX] Submission failed")
-                return None
+                err = "Transaction submission failed"
+                self.logger.error(f"[TX] {err}")
+                raise RuntimeError(err)
             self.logger.info(f"[TX] Sent: {tx_hash}")
 
             # 4) Immediate backend tracking with meta

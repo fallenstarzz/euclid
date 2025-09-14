@@ -42,12 +42,27 @@ class WalletManager:
                 "native_token": "PHRS"
             },
             "unichain": {
-                "rpc_url": "https://testnet.dplabs-internal.com",
+                # Prefer a dedicated Unichain Sepolia endpoint; can be overridden by env UNICHAIN_RPC_URL
+                "rpc_url": "https://sepolia.unichain.org",
                 "chain_id": 1301,
                 "name": "Unichain Sepolia",
                 "native_token": "ETH"
             }
         }
+
+        # Allow RPC overrides via environment variables
+        try:
+            overrides = {
+                "plume": os.getenv("PLUME_RPC_URL"),
+                "somnia": os.getenv("SOMNIA_RPC_URL"),
+                "pharos": os.getenv("PHAROS_RPC_URL"),
+                "unichain": os.getenv("UNICHAIN_RPC_URL"),
+            }
+            for net, url in overrides.items():
+                if url:
+                    self.networks[net]["rpc_url"] = url
+        except Exception:
+            pass
         
         # Setup default Web3 connection (Plume)
         self.current_network = "plume"
@@ -65,10 +80,10 @@ class WalletManager:
             except Exception as e:
                 self.logger.error(f"[ERROR] {network_config['name']} connection failed: {e}")
         
-        # Set primary connection to Plume (default)
-        self.w3 = self.w3_connections.get("plume")
+        # Set primary connection; prefer Unichain if token context demands later
+        self.w3 = self.w3_connections.get("plume") or next(iter(self.w3_connections.values()), None)
         if not self.w3:
-            raise ConnectionError("Failed to connect to default Plume network")
+            raise ConnectionError("Failed to connect to any configured network")
         
         # Validate and format private key
         from .utils import validate_private_key
@@ -97,15 +112,28 @@ class WalletManager:
             target_network = "plume"
             
         if target_network != self.current_network:
-            if target_network in self.w3_connections:
-                self.w3 = self.w3_connections[target_network]
-                self.current_network = target_network
-                network_info = self.networks[target_network]
-                self.logger.info(f"[NETWORK SWITCH] Switched to {network_info['name']} for {token_type.upper()} transactions")
-                return True
-            else:
-                self.logger.error(f"[ERROR] Network {target_network} not available")
-                return False
+            # Ensure connection exists; if missing, try to create it
+            if target_network not in self.w3_connections:
+                try:
+                    rpc_url = self.networks[target_network]["rpc_url"]
+                    w3_try = Web3(Web3.HTTPProvider(rpc_url))
+                    if w3_try.is_connected():
+                        self.w3_connections[target_network] = w3_try
+                    else:
+                        self.logger.error(f"[ERROR] Failed to connect to {target_network} at {rpc_url}")
+                        return False
+                except Exception as e:
+                    self.logger.error(f"[ERROR] Network {target_network} not available: {e}")
+                    return False
+
+            self.w3 = self.w3_connections[target_network]
+            self.current_network = target_network
+            network_info = self.networks[target_network]
+            self.logger.info(f"[NETWORK SWITCH] Switched to {network_info['name']} for {token_type.upper()} transactions")
+            # Clear caches on network switch to avoid cross-network contamination
+            self._balance_cache.clear()
+            self._nonce_cache.pop(target_network, None)
+            return True
         return True
         
     def get_address(self) -> str:
@@ -120,7 +148,8 @@ class WalletManager:
             token_address: Token contract address (None for ETH)
             force_refresh: Skip cache and fetch fresh balance
         """
-        cache_key = token_address or "ETH"
+        # Cache is per-network to avoid mixing balances across networks
+        cache_key = f"{self.current_network}:{token_address or 'NATIVE'}"
         
         if not force_refresh and cache_key in self._balance_cache:
             return self._balance_cache[cache_key]
@@ -154,6 +183,47 @@ class WalletManager:
             
         except Exception:
             # Silent error - return 0
+            return Decimal('0')
+
+    def get_native_balance_on(self, chain_uid: str) -> Decimal:
+        """Get native balance on a specific network without changing current connection."""
+        try:
+            chain_uid_lc = (chain_uid or '').lower()
+            if chain_uid_lc not in self.networks:
+                return Decimal('0')
+            rpc_url = self.networks[chain_uid_lc].get('rpc_url')
+            w3_tmp = Web3(Web3.HTTPProvider(rpc_url))
+            if not w3_tmp.is_connected():
+                return Decimal('0')
+            bal_wei = w3_tmp.eth.get_balance(self.address)
+            return Decimal(w3_tmp.from_wei(bal_wei, 'ether'))
+        except Exception:
+            return Decimal('0')
+
+    def get_native_balance_via_rpc(self, rpc_url: str) -> Decimal:
+        """Direct JSON-RPC eth_getBalance without altering state."""
+        try:
+            if not rpc_url:
+                return Decimal('0')
+            from requests import post
+            payload = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "eth_getBalance",
+                "params": [self.address, "latest"]
+            }
+            r = post(rpc_url, json=payload, timeout=10)
+            if r.status_code != 200:
+                return Decimal('0')
+            data = r.json()
+            result = data.get('result')
+            if not result:
+                return Decimal('0')
+            wei = int(result, 16)
+            # Use a temporary Web3 instance for from_wei conversion
+            tmp = Web3()
+            return Decimal(tmp.from_wei(wei, 'ether'))
+        except Exception:
             return Decimal('0')
     
     def get_nonce(self, force_refresh: bool = False) -> int:
@@ -394,6 +464,13 @@ class WalletManager:
             "nonce": self.get_nonce(),
             "connected": self.w3.is_connected()
         }
+
+    def get_current_chain_id(self) -> int:
+        """Return current provider chain id (best effort)."""
+        try:
+            return int(self.w3.eth.chain_id)
+        except Exception:
+            return -1
     
     def execute_swap_transaction(self, swap_data: Dict[str, Any], token_in: str = "plume", wait_for_receipt: bool = True) -> str:
         """
@@ -439,6 +516,12 @@ class WalletManager:
             except Exception:
                 msg_chain_id = None
 
+            # Get correct nonce from the same provider used to send
+            try:
+                nonce_for_tx = w3_for_tx.eth.get_transaction_count(self.address, 'pending')
+            except Exception:
+                nonce_for_tx = self.get_nonce()
+
             transaction = {
                 'from': self.address,
                 'to': Web3.to_checksum_address(msg['to']),
@@ -446,7 +529,7 @@ class WalletManager:
                 'value': int(msg['value'], 16),
                 'gas': 800000,  # Increased gas limit for complex swaps
                 'gasPrice': w3_for_tx.eth.gas_price,
-                'nonce': self.get_nonce(),
+                'nonce': nonce_for_tx,
                 'chainId': msg_chain_id or (w3_for_tx.eth.chain_id if hasattr(w3_for_tx.eth, 'chain_id') else self.w3.eth.chain_id)
             }
             
@@ -476,7 +559,7 @@ class WalletManager:
             
             self.logger.info(f"[PROCESS] Broadcasting to {network_info['name']}...")
             
-            # Send to blockchain
+            # Send to blockchain with explicit timeout handling
             tx_hash = w3_for_tx.eth.send_raw_transaction(signed_tx.raw_transaction)
             tx_hash_hex = tx_hash.hex()
             

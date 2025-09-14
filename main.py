@@ -658,9 +658,9 @@ class EuclidBot:
                         print("Cancelled.")
                         return
                 # Contextual adaptive config
-                cfg = self._configure_amount_context("PLUME", amount)
+                # Fixed mode only
                 mode, count = self._select_execution_mode()
-                self._execute_swaps_generic("plume", "stt", False, cfg.current_amount, mode, count)
+                self._execute_swaps_generic("plume", "stt", False, amount, mode, count)
 
             elif choice == "2":
                 # STT → PLUME
@@ -678,9 +678,8 @@ class EuclidBot:
                     if proceed != 'y':
                         print("Cancelled.")
                         return
-                cfg = self._configure_amount_context("STT", amount)
                 mode, count = self._select_execution_mode()
-                self._execute_swaps_generic("stt", "plume", False, cfg.current_amount, mode, count)
+                self._execute_swaps_generic("stt", "plume", False, amount, mode, count)
 
             elif choice == "3":
                 # PHRS → ETH
@@ -698,17 +697,34 @@ class EuclidBot:
                     if proceed != 'y':
                         print("Cancelled.")
                         return
-                cfg = self._configure_amount_context("PHRS", amount)
                 mode, count = self._select_execution_mode()
-                self._execute_swaps_generic("phrs", "eth", True, cfg.current_amount, mode, count)
+                self._execute_swaps_generic("phrs", "eth", True, amount, mode, count)
 
             elif choice == "4":
                 # ETH → PHRS
-                eth_bal = self._get_native_balance("eth")
-                print(Colors.colorize_brackets(f"[BALANCE] Source ETH: {eth_bal:.6f}"))
-                default_amt = 0.01
+                # Switch to Unichain and fetch native balance directly
+                switched = self.wallet.switch_network("unichain")
+                # Verify chain id matches Unichain Sepolia (1301)
+                cid = self.wallet.get_current_chain_id()
+                # Try reading direct via RPC override first if available
+                import os
+                rpc_override = os.getenv("UNICHAIN_RPC_URL", "https://sepolia.unichain.org")
+                eth_bal_direct = float(self.wallet.get_native_balance_via_rpc(rpc_override))
+                if eth_bal_direct > 0:
+                    print(Colors.colorize_brackets(f"[BALANCE] Source ETH: {eth_bal_direct:.6f}"))
+                else:
+                    if (not switched) or cid != 1301:
+                        print(Colors.colorize_brackets(f"[ERROR] Unichain RPC not connected (chainId={cid}). Set UNICHAIN_RPC_URL and retry."))
+                        print(Colors.colorize_brackets(f"[BALANCE] Source ETH: unknown"))
+                    else:
+                        eth_bal = float(self.wallet.get_balance(force_refresh=True))
+                        print(Colors.colorize_brackets(f"[BALANCE] Source ETH: {eth_bal:.6f}"))
+                default_amt = 0.01  # Enforce minimum default for Unichain Sepolia
                 amt_str = input(f"Amount ETH (default {default_amt}): ").strip()
                 amount = float(amt_str) if amt_str else default_amt
+                if amount < 0.01:
+                    print(Colors.colorize_brackets("[ERROR] Minimum amount for Unichain Sepolia (ETH) is 0.01"))
+                    return
                 amount_wei = int(amount * 10**18)
                 preview = self._preview_route("eth", "phrs", amount_wei)
                 if preview:
@@ -718,9 +734,8 @@ class EuclidBot:
                     if proceed != 'y':
                         print("Cancelled.")
                         return
-                cfg = self._configure_amount_context("ETH", amount)
                 mode, count = self._select_execution_mode()
-                self._execute_swaps_generic("eth", "phrs", True, cfg.current_amount, mode, count)
+                self._execute_swaps_generic("eth", "phrs", True, amount, mode, count)
 
             else:
                 print("Goodbye.")
@@ -753,31 +768,7 @@ class EuclidBot:
         except Exception:
             return None
 
-    def _configure_amount_context(self, token_label: str, default_amount: float):
-        """Prompt adaptive configuration in context of selected token, token-agnostic storage."""
-        try:
-            from src.adaptive_config import AdaptiveConfigManager
-            mgr = AdaptiveConfigManager()
-            print(f"\nConfigure adaptive settings for {token_label} swaps")
-            use_saved = mgr.prompt_use_saved_configuration()
-            if use_saved:
-                cfg = mgr.load_saved_configuration()
-                if cfg:
-                    return cfg
-            # Quick choice: fixed/adaptive
-            mode_choice = input("Mode: 1) Fixed  2) Adaptive [default 2]: ").strip()
-            if mode_choice == '1' and default_amount >= 0.1:
-                from src.adaptive_amount_manager import AdaptiveConfiguration
-                return AdaptiveConfiguration(initial_amount=default_amount)
-            # Advanced adaptive prompt
-            cfg, ok = mgr.prompt_user_for_configuration(token_label)
-            if ok and cfg:
-                return cfg
-        except Exception:
-            pass
-        # Fallback fixed
-        from src.adaptive_amount_manager import AdaptiveConfiguration
-        return AdaptiveConfiguration(initial_amount=default_amount)
+    # Adaptive configuration removed for simplicity
 
     def _select_execution_mode(self):
         """Ask for execution mode and optional count."""

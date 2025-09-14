@@ -14,3 +14,4 @@ Automated bot for PLUME ↔ STT and PHRS ↔ ETH (Pharos ↔ Unichain) swaps on 
 2. Install dependencies
 3. Create a `.env` file with your private key
 4. Run the bot
+

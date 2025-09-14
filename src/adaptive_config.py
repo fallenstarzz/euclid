@@ -34,11 +34,13 @@ class AdaptiveConfigManager:
             # Get initial amount from user
             while True:
                 try:
-                    amount_input = input(f"\n{Fore.YELLOW}Enter swap amount in {token_ctx} (minimum 0.1): {Style.RESET_ALL}").strip()
+                    # Per-token minimum: ETH on Unichain uses 0.01, others 0.1
+                    min_amount = 0.01 if token_ctx.upper() == 'ETH' else 0.1
+                    amount_input = input(f"\n{Fore.YELLOW}Enter swap amount in {token_ctx} (minimum {min_amount}): {Style.RESET_ALL}").strip()
                     initial_amount = float(amount_input)
                     
-                    if initial_amount < 0.1:
-                        print(f"{Fore.RED}[ERROR]{Style.RESET_ALL} Amount must be at least 0.1")
+                    if initial_amount < min_amount:
+                        print(f"{Fore.RED}[ERROR]{Style.RESET_ALL} Amount must be at least {min_amount}")
                         continue
                     
                     break
